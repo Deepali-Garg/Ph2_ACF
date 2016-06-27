@@ -48,7 +48,8 @@ namespace Ph2_HwInterface
 		fEventCount( pEvent.fEventCount ),
 		fEventCountCBC( pEvent.fEventCountCBC ),
 		fTDC( pEvent.fTDC ),
-		fEventMap( pEvent.fEventMap )
+		fEventMap( pEvent.fEventMap ),
+		ClusterMap( pEvent.ClusterMap)
 	{
 
 	}
@@ -241,7 +242,7 @@ namespace Ph2_HwInterface
 	}
 
 
-	std::string Event::BitString( uint8_t pFeId, uint8_t pCbcId, uint32_t pOffset, uint32_t pWidth ) const
+	std::string Event::BitString( uint8_t pFeId, uint8_t pCbcId, uint32_t OFFSET_DATA, uint32_t pWidth ) const
 	{
 		std::vector<uint8_t> cbcData;
 		GetCbcEvent( pFeId, pCbcId, cbcData );
@@ -249,7 +250,7 @@ namespace Ph2_HwInterface
 		std::ostringstream os;
 		for ( uint32_t i = 0; i < pWidth; ++i )
 		{
-			uint32_t pos = i + pOffset;
+			uint32_t pos = i + OFFSET_DATA;
 			uint32_t cByteP = pos / 8;
 			uint32_t cBitP = pos % 8;
 			if ( cByteP >= cbcData.size() ) break;
@@ -258,7 +259,7 @@ namespace Ph2_HwInterface
 		}
 		return os.str();
 	}
-	std::vector<bool> Event::BitVector( uint8_t pFeId, uint8_t pCbcId, uint32_t pOffset, uint32_t pWidth ) const
+	std::vector<bool> Event::BitVector( uint8_t pFeId, uint8_t pCbcId, uint32_t OFFSET_DATA, uint32_t pWidth ) const
 	{
 		std::vector< uint8_t > cbcData;
 		GetCbcEvent( pFeId, pCbcId, cbcData );
@@ -266,7 +267,7 @@ namespace Ph2_HwInterface
 		std::vector<bool> blist;
 		for ( uint32_t i = 0; i < pWidth; ++i )
 		{
-			uint32_t pos = i + pOffset;
+			uint32_t pos = i + OFFSET_DATA;
 			uint32_t cByteP = pos / 8;
 			uint32_t cBitP = pos % 8;
 			if ( cByteP >= cbcData.size() ) break;
@@ -288,7 +289,7 @@ namespace Ph2_HwInterface
 
 	std::vector<bool> Event::DataBitVector( uint8_t pFeId, uint8_t pCbcId, const std::vector<uint8_t>& channelList ) const
 	{
-		uint32_t pOffset = OFFSET_CBCDATA;
+		uint32_t OFFSET_DATA = OFFSET_CBCDATA;
 
 		std::vector< uint8_t > cbcData;
 		GetCbcEvent( pFeId, pCbcId, cbcData );
@@ -296,7 +297,7 @@ namespace Ph2_HwInterface
 		std::vector<bool> blist;
 		for ( auto i :  channelList )
 		{
-			uint32_t pos = i + pOffset;
+			uint32_t pos = i + OFFSET_DATA;
 			uint32_t cByteP = pos / 8;
 			uint32_t cBitP = pos % 8;
 			if ( cByteP >= cbcData.size() ) break;
@@ -416,4 +417,98 @@ namespace Ph2_HwInterface
 		}
 		return os;
 	}
+
+	void Event::BuildClusters( uint8_t pFeId)  
+	{ 
+                bool bit;
+                bool InCluster;
+               	
+		uint32_t firststrip,cbcstrip,CbcId;
+		uint32_t pos;
+		uint32_t cByteP;
+		uint32_t cBitP;
+		int32_t Cbc_Nb;
+		uint32_t position, width ;
+	
+          
+          EventMap::const_iterator cIt = fEventMap.find( pFeId );
+
+// strips -> firstStrip
+
+		for(firststrip=0; firststrip<2; firststrip++) //loop for two strips
+		 {  //Flag for clusters across CBCs
+		   Cbc_Nb = -1; 
+		   width = 0;
+                   InCluster=0;
+		   for(CbcId=0; CbcId< (cIt->second.size()) ; CbcId++) // loop over all CBCs in the Hybrid
+		    {  
+			FeEventMap::const_iterator cJt = cIt->second.find( CbcId );
+	                    std::vector<Cluster> & Clusters = ClusterMap[CbcId] ; 
+			   Clusters.clear();
+// sensor -> cbcStrip
+		       for(cbcstrip = firststrip; cbcstrip < WIDTH_CBCDATA ; cbcstrip +=2 )
+			{ pos = cbcstrip+OFFSET_CBCDATA;
+			  cByteP = pos / 8;
+			  cBitP = pos % 8;
+			  if ( cByteP >= cJt->second.second - cJt->second.first +1 ) 
+			  { break; 
+			   std::cout<<"WARNING : CBC DATA for the CBC ID =" << CbcId << "; FE ID =" << pFeId << "doesn't exist" ;
+			  }
+		         bit =  ( fEventData[cJt->second.first + cByteP] >> ( 7 - cBitP ) ) & 0x1;
+			 
+			 if(bit)
+			 { if( InCluster == 0)
+			    { InCluster = 1;
+			      position = cbcstrip;
+				Cbc_Nb = CbcId;
+			    }
+			   width++; // increase the width either for a new cluster or for an existing one
+			   
+			  }
+
+			  else
+			  { if(InCluster == 1) 
+			     ClusterMap[Cbc_Nb].push_back(Cluster(position,width));
+			      
+			      InCluster = 0;
+			      width = 0;
+			     }
+			  }
+			}
+		      }
+		 
+
+		return;
+	}
+
+std::vector<Cluster>& Event::GetCluster( uint8_t pFeId, uint8_t pCbcId) 
+	{
+		if ((ClusterMap.find(pCbcId))== ClusterMap.end()){	//if clusters associated with pCbcId don't exist
+			BuildClusters( pFeId);
+		}
+		
+		// Display ClusterMap and DataBit to compare
+		std::cout<< "ClusterMap for the FE Id : " << pFeId << "and CBC Id : "<< pCbcId <<"is : \n" ;		
+		for(uint32_t i=0; i< ClusterMap[pCbcId].size(); i++)
+		{
+			std::cout<< ClusterMap[pCbcId][i].GetPosition() ;
+			std::cout<< ClusterMap[pCbcId][i].GetWidth() ;
+		}
+		std::cout<<"\n" ;
+		
+		std::vector<bool> Data  = DataBitVector(pFeId,pCbcId) ;
+		std::cout<<"CBC DATA for the FE Id : " << pFeId << "and CBC Id : " << pCbcId << "is : \n" ;
+		for(uint32_t i=0; i< Data.size(); i++)
+		{
+			std::cout<< Data[i] ;
+		}
+		std::cout<<"\n" ;
+		//
+
+		return ClusterMap[pCbcId];
+	}
+
+
+	
+	
 }
